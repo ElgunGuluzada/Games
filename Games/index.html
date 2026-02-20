@@ -1,0 +1,282 @@
+﻿<!doctype html>
+<html lang="az">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Neon Dodge</title>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            background: #05060a;
+            color: #e8f0ff;
+            font-family: system-ui
+        }
+
+        .wrap {
+            display: grid;
+            place-items: center;
+            height: 100%
+        }
+
+        canvas {
+            border: 1px solid #1a2a55;
+            border-radius: 12px;
+            box-shadow: 0 0 30px rgba(70,120,255,.25)
+        }
+
+        .hud {
+            max-width: 760px;
+            margin: 12px auto 0;
+            display: flex;
+            justify-content: space-between;
+            gap: 12px
+        }
+
+        .pill {
+            padding: 8px 12px;
+            border: 1px solid #223;
+            border-radius: 999px;
+            background: rgba(20,30,60,.45)
+        }
+
+        kbd {
+            background: #121826;
+            border: 1px solid #2b3350;
+            border-bottom-width: 3px;
+            border-radius: 6px;
+            padding: 2px 6px
+        }
+
+        .hint {
+            opacity: .85;
+            font-size: 14px
+        }
+
+        button {
+            cursor: pointer
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div>
+            <canvas id="c" width="760" height="480"></canvas>
+            <div class="hud">
+                <div class="pill">Skor: <b id="score">0</b> · Rekord: <b id="best">0</b></div>
+                <div class="pill hint">İdarə: <kbd>WASD</kbd>/<kbd>←↑→↓</kbd> · Pauza: <kbd>P</kbd> · Yenidən: <kbd>R</kbd></div>
+                <button class="pill" id="restart">Restart</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+
+  const scoreEl = document.getElementById("score");
+  const bestEl  = document.getElementById("best");
+  const restartBtn = document.getElementById("restart");
+
+  const key = new Set();
+  window.addEventListener("keydown", e => {
+    const k = e.key.toLowerCase();
+    key.add(k);
+    if (k === "p") paused = !paused;
+    if (k === "r") reset();
+  });
+  window.addEventListener("keyup", e => key.delete(e.key.toLowerCase()));
+
+  let best = Number(localStorage.getItem("neon_best") || 0);
+  bestEl.textContent = best;
+
+  const player = { x: W/2, y: H-70, r: 14, vx:0, vy:0, speed: 420 };
+  const hazards = [];
+  const sparks = [];
+  let t = 0;
+  let score = 0;
+  let over = false;
+  let paused = false;
+
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+  function spawnHazard(){
+    const r = rand(10, 26);
+    hazards.push({
+      x: rand(r, W-r),
+      y: -r - 10,
+      r,
+      vy: rand(160, 360) + Math.min(score*2, 220),
+      vx: rand(-60, 60),
+      hue: rand(0, 25)
+    });
+  }
+
+  function burst(x,y,n=12){
+    for(let i=0;i<n;i++){
+      sparks.push({
+        x,y,
+        vx: rand(-220,220),
+        vy: rand(-220,220),
+        life: rand(.25,.7),
+        a: 1
+      });
+    }
+  }
+
+  function reset(){
+    hazards.length = 0;
+    sparks.length = 0;
+    player.x = W/2; player.y = H-70;
+    score = 0; t = 0;
+    over = false;
+    paused = false;
+    scoreEl.textContent = score;
+  }
+
+  restartBtn.onclick = reset;
+
+  function drawGrid(){
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = "#2c3a76";
+    for(let x=0;x<=W;x+=38){
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    }
+    for(let y=0;y<=H;y+=38){
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawGlowCircle(x,y,r,color){
+    const g = ctx.createRadialGradient(x,y,0,x,y,r*3);
+    g.addColorStop(0, color);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x,y,r*3,0,Math.PI*2); ctx.fill();
+
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.033, (now-last)/1000);
+    last = now;
+
+    if(!paused && !over){
+      t += dt;
+
+      // input
+      let ax=0, ay=0;
+      if(key.has("arrowleft")||key.has("a")) ax -= 1;
+      if(key.has("arrowright")||key.has("d")) ax += 1;
+      if(key.has("arrowup")||key.has("w")) ay -= 1;
+      if(key.has("arrowdown")||key.has("s")) ay += 1;
+
+      const len = Math.hypot(ax,ay) || 1;
+      ax/=len; ay/=len;
+
+      player.x += ax * player.speed * dt;
+      player.y += ay * player.speed * dt;
+      player.x = clamp(player.x, player.r, W-player.r);
+      player.y = clamp(player.y, player.r, H-player.r);
+
+      // spawn rate scales with score
+      const rate = clamp(0.85 - score/250, 0.22, 0.85);
+      if (t % rate < dt) spawnHazard();
+
+      // update hazards
+      for(let i=hazards.length-1;i>=0;i--){
+        const h = hazards[i];
+        h.y += h.vy * dt;
+        h.x += h.vx * dt;
+        if(h.x < h.r || h.x > W-h.r) h.vx *= -1;
+
+        // collision
+        const d = Math.hypot(h.x-player.x, h.y-player.y);
+        if(d < h.r + player.r){
+          over = true;
+          burst(player.x, player.y, 36);
+          if(score > best){
+            best = score;
+            localStorage.setItem("neon_best", String(best));
+            bestEl.textContent = best;
+          }
+        }
+        // score when passed
+        if(h.y - h.r > H){
+          hazards.splice(i,1);
+          score++;
+          scoreEl.textContent = score;
+          if(score % 10 === 0) burst(player.x, player.y, 8);
+        }
+      }
+
+      // sparks
+      for(let i=sparks.length-1;i>=0;i--){
+        const s = sparks[i];
+        s.life -= dt;
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        s.vx *= 0.98; s.vy *= 0.98;
+        s.a = clamp(s.life/0.7,0,1);
+        if(s.life <= 0) sparks.splice(i,1);
+      }
+    }
+
+    // draw
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = "#05060a";
+    ctx.fillRect(0,0,W,H);
+
+    drawGrid();
+
+    // hazards
+    for(const h of hazards){
+      const col = `hsla(${h.hue}, 100%, 60%, 0.95)`;
+      drawGlowCircle(h.x,h.y,h.r,col);
+    }
+
+    // player
+    drawGlowCircle(player.x,player.y,player.r,"rgba(90,170,255,0.95)");
+
+    // sparks
+    for(const s of sparks){
+      ctx.fillStyle = `rgba(140,220,255,${s.a})`;
+      ctx.fillRect(s.x, s.y, 2.5, 2.5);
+    }
+
+    // overlay
+    if(paused){
+      overlay("PAUZA", "Davam üçün P");
+    } else if(over){
+      overlay("Oyun Bitdi", "R: yenidən · Skor: " + score);
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  function overlay(title, sub){
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = "#e9f1ff";
+    ctx.textAlign = "center";
+    ctx.font = "700 44px system-ui";
+    ctx.fillText(title, W/2, H/2 - 10);
+    ctx.font = "400 18px system-ui";
+    ctx.fillText(sub, W/2, H/2 + 24);
+    ctx.restore();
+  }
+
+  reset();
+  requestAnimationFrame(loop);
+})();
+    </script>
+</body>
+</html>
