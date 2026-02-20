@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="az">
 <head>
     <meta charset="utf-8" />
@@ -63,8 +63,8 @@
         <div>
             <canvas id="c" width="760" height="480"></canvas>
             <div class="hud">
-                <div class="pill">Skor: <b id="score">0</b> · Rekord: <b id="best">0</b></div>
-                <div class="pill hint">İdarə: <kbd>WASD</kbd>/<kbd>←↑→↓</kbd> · Pauza: <kbd>P</kbd> · Yenidən: <kbd>R</kbd></div>
+                <div class="pill">Skor: <b id="score">0</b> · Rekord: <b id="best">0</b> · Səhnə: <b id="scene">Sakit</b> · <span id="effects"></span></div>
+                <div class="pill hint">İdarə: <kbd>WASD</kbd>/<kbd>←↑→↓</kbd> · Molekullar: <b>C</b> D B K Q · Pauza: <kbd>P</kbd> · Yenidən: <kbd>R</kbd></div>
                 <button class="pill" id="restart">Restart</button>
             </div>
         </div>
@@ -78,6 +78,8 @@
 
   const scoreEl = document.getElementById("score");
   const bestEl  = document.getElementById("best");
+  const sceneEl = document.getElementById("scene");
+  const effectsEl = document.getElementById("effects");
   const restartBtn = document.getElementById("restart");
 
   const key = new Set();
@@ -92,26 +94,66 @@
   let best = Number(localStorage.getItem("neon_best") || 0);
   bestEl.textContent = best;
 
-  const player = { x: W/2, y: H-70, r: 14, vx:0, vy:0, speed: 420 };
+  const BASE_PLAYER_R = 14;
+  const player = { x: W/2, y: H-70, r: BASE_PLAYER_R, vx:0, vy:0, speed: 420 };
   const hazards = [];
+  const vitamins = [];
   const sparks = [];
   let t = 0;
   let score = 0;
   let over = false;
   let paused = false;
+  let lastScene = 0;
+  let sceneIntroTime = 0;
+  let effectShrink = 0, effectGrow = 0, effectSlow = 0, effectShield = 0;
+  let lastVitaminSpawn = 0;
+
+  const VITAMIN_TYPES = [
+    { id: "kicilme", name: "Kiçilmə", letter: "C", color: "#ff9f43", hue: 30,  dur: 10, scale: 0.7 },
+    { id: "boyume",  name: "Böyümə",  letter: "D", color: "#54a0ff", hue: 210, dur: 10, scale: 1.4 },
+    { id: "yavas",   name: "Yavaşlatma", letter: "B", color: "#2ecc71", hue: 145, dur: 8,  slowMul: 0.5 },
+    { id: "bomba",   name: "Bomba",   letter: "K", color: "#ff6b6b", hue: 0,   dur: 0 },
+    { id: "qoruma",  name: "Qoruma",  letter: "Q", color: "#f1c40f", hue: 45,  dur: 5 }
+  ];
+
+  const SCENES = [
+    { name: "Sakit", min: 0,   bg: "#05060a", grid: "#2c3a76", spawnMul: 1.0, speedMul: 1.0, hueMin: 0,   hueMax: 25 },
+    { name: "Qızdırma", min: 15,  bg: "#0a0812", grid: "#4a2a66", spawnMul: 1.3, speedMul: 1.2, hueMin: 260, hueMax: 300 },
+    { name: "Alovlanma", min: 35,  bg: "#120a08", grid: "#662a2a", spawnMul: 1.6, speedMul: 1.4, hueMin: 0,   hueMax: 50 },
+    { name: "Xaos", min: 60,  bg: "#0a0a14", grid: "#3a2a6a", spawnMul: 2.0, speedMul: 1.7, hueMin: 270, hueMax: 320 },
+    { name: "Ölüm Zərgüşü", min: 100, bg: "#140a0a", grid: "#6a2a2a", spawnMul: 2.5, speedMul: 2.0, hueMin: 0,   hueMax: 30 },
+    { name: "QEYRİ-İNSANİ", min: 160, bg: "#0a0a0a", grid: "#8a2040", spawnMul: 3.0, speedMul: 2.3, hueMin: 300, hueMax: 360 }
+  ];
+  function getScene(){ for(let i=SCENES.length-1;i>=0;i--) if(score>=SCENES[i].min) return SCENES[i]; return SCENES[0]; }
+  function getSceneIndex(){ for(let i=SCENES.length-1;i>=0;i--) if(score>=SCENES[i].min) return i; return 0; }
 
   function rand(a,b){ return a + Math.random()*(b-a); }
   function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
   function spawnHazard(){
+    const scene = getScene();
     const r = rand(10, 26);
     hazards.push({
       x: rand(r, W-r),
       y: -r - 10,
       r,
-      vy: rand(160, 360) + Math.min(score*2, 220),
-      vx: rand(-60, 60),
-      hue: rand(0, 25)
+      vy: (rand(160, 360) + Math.min(score*2, 220)) * scene.speedMul,
+      vx: rand(-60, 60) * scene.speedMul,
+      hue: rand(scene.hueMin, scene.hueMax)
+    });
+  }
+
+  function spawnVitamin(){
+    const type = VITAMIN_TYPES[Math.floor(Math.random() * VITAMIN_TYPES.length)];
+    const r = 6;
+    vitamins.push({
+      ...type,
+      x: rand(r, W-r),
+      y: -r - 10,
+      r,
+      vy: rand(60, 120),
+      vx: rand(-15, 15),
+      bob: rand(0, Math.PI*2)
     });
   }
 
@@ -129,20 +171,26 @@
 
   function reset(){
     hazards.length = 0;
+    vitamins.length = 0;
     sparks.length = 0;
     player.x = W/2; player.y = H-70;
+    player.r = BASE_PLAYER_R;
     score = 0; t = 0;
     over = false;
     paused = false;
+    lastScene = 0;
+    sceneIntroTime = 0;
+    effectShrink = 0; effectGrow = 0; effectSlow = 0; effectShield = 0;
+    lastVitaminSpawn = 0;
     scoreEl.textContent = score;
   }
 
   restartBtn.onclick = reset;
 
-  function drawGrid(){
+  function drawGrid(color){
     ctx.save();
     ctx.globalAlpha = 0.18;
-    ctx.strokeStyle = "#2c3a76";
+    ctx.strokeStyle = color || "#2c3a76";
     for(let x=0;x<=W;x+=38){
       ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
     }
@@ -186,26 +234,87 @@
       player.x = clamp(player.x, player.r, W-player.r);
       player.y = clamp(player.y, player.r, H-player.r);
 
-      // spawn rate scales with score
-      const rate = clamp(0.85 - score/250, 0.22, 0.85);
+      // spawn rate: score + scene multiplier
+      const scene = getScene();
+      const baseRate = clamp(0.85 - score/250, 0.22, 0.85);
+      const rate = baseRate / scene.spawnMul;
       if (t % rate < dt) spawnHazard();
 
+      // molekul spawn hər ~8-10 san
+      if (t - lastVitaminSpawn > 8 && vitamins.length < 3) {
+        lastVitaminSpawn = t;
+        spawnVitamin();
+      }
+
+      // vitamin update & collision
+      for(let i=vitamins.length-1;i>=0;i--){
+        const v = vitamins[i];
+        v.y += v.vy * dt;
+        v.x += v.vx * dt;
+        v.bob += dt * 4;
+        if(v.x < v.r || v.x > W-v.r) v.vx *= -1;
+        const d = Math.hypot(v.x-player.x, v.y-player.y);
+        if(d < v.r + player.r){
+          vitamins.splice(i,1);
+          burst(player.x, player.y, 12);
+          if(v.id === "kicilme") effectShrink = v.dur;
+          else if(v.id === "boyume") effectGrow = v.dur;
+          else if(v.id === "yavas") effectSlow = v.dur;
+          else if(v.id === "qoruma") effectShield = v.dur;
+          else if(v.id === "bomba"){
+            const n = hazards.length;
+            hazards.length = 0;
+            score += n;
+            scoreEl.textContent = score;
+            for(let j=0;j<Math.min(n*3, 50);j++) burst(rand(0,W), rand(0,H), 1);
+          }
+        }
+        if(v.y - v.r > H) vitamins.splice(i,1);
+      }
+
+      // effect timers
+      if(effectShrink > 0) effectShrink -= dt;
+      if(effectGrow > 0) effectGrow -= dt;
+      if(effectSlow > 0) effectSlow -= dt;
+      if(effectShield > 0) effectShield -= dt;
+
+      // apply player size effects (stronger takes precedence)
+      if(effectGrow > 0) player.r = BASE_PLAYER_R * 1.4;
+      else if(effectShrink > 0) player.r = BASE_PLAYER_R * 0.7;
+      else player.r = BASE_PLAYER_R;
+
+      // scene intro when entering new scene
+      const sceneIdx = getSceneIndex();
+      if (sceneIdx !== lastScene) {
+        lastScene = sceneIdx;
+        sceneIntroTime = 2.2;
+      }
+      if (sceneIntroTime > 0) sceneIntroTime -= dt;
+
       // update hazards
+      const slowMul = effectSlow > 0 ? 0.5 : 1;
       for(let i=hazards.length-1;i>=0;i--){
         const h = hazards[i];
-        h.y += h.vy * dt;
-        h.x += h.vx * dt;
+        h.y += h.vy * dt * slowMul;
+        h.x += h.vx * dt * slowMul;
         if(h.x < h.r || h.x > W-h.r) h.vx *= -1;
 
         // collision
         const d = Math.hypot(h.x-player.x, h.y-player.y);
         if(d < h.r + player.r){
-          over = true;
-          burst(player.x, player.y, 36);
-          if(score > best){
-            best = score;
-            localStorage.setItem("neon_best", String(best));
-            bestEl.textContent = best;
+          if(effectShield > 0){
+            hazards.splice(i,1);
+            score++;
+            scoreEl.textContent = score;
+            burst(h.x, h.y, 8);
+          } else {
+            over = true;
+            burst(player.x, player.y, 36);
+            if(score > best){
+              best = score;
+              localStorage.setItem("neon_best", String(best));
+              bestEl.textContent = best;
+            }
           }
         }
         // score when passed
@@ -230,11 +339,23 @@
     }
 
     // draw
-    ctx.clearRect(0,0,W,H);
-    ctx.fillStyle = "#05060a";
+    const scene = getScene();
+    const sceneIdx = getSceneIndex();
+    sceneEl.textContent = scene.name;
+    const eff = [];
+    if(effectShrink > 0) eff.push("C " + effectShrink.toFixed(1) + "s");
+    if(effectGrow > 0) eff.push("D " + effectGrow.toFixed(1) + "s");
+    if(effectSlow > 0) eff.push("B " + effectSlow.toFixed(1) + "s");
+    if(effectShield > 0) eff.push("Q " + effectShield.toFixed(1) + "s");
+    effectsEl.textContent = eff.length ? eff.join(" · ") : "";
+    const shakeX = sceneIdx >= 5 ? (Math.random()-0.5)*8 : sceneIdx >= 4 ? (Math.random()-0.5)*4 : 0;
+    const shakeY = sceneIdx >= 5 ? (Math.random()-0.5)*8 : sceneIdx >= 4 ? (Math.random()-0.5)*4 : 0;
+    ctx.save();
+    if (!paused && !over) ctx.translate(shakeX, shakeY);
+    ctx.clearRect(-5,-5,W+10,H+10);
+    ctx.fillStyle = scene.bg;
     ctx.fillRect(0,0,W,H);
-
-    drawGrid();
+    drawGrid(scene.grid);
 
     // hazards
     for(const h of hazards){
@@ -242,8 +363,46 @@
       drawGlowCircle(h.x,h.y,h.r,col);
     }
 
+    // vitamins (xırda molekullar - kiçik, hərflə)
+    for(const v of vitamins){
+      ctx.save();
+      const bobY = Math.sin(v.bob) * 2;
+      const px = v.x, py = v.y + bobY;
+      const pulse = 0.9 + Math.sin(v.bob * 1.5) * 0.15;
+      const g = ctx.createRadialGradient(px,py,0,px,py,v.r*4);
+      g.addColorStop(0, v.color);
+      g.addColorStop(0.5, v.color + "80");
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(px, py, v.r * 3 * pulse, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = v.color;
+      ctx.beginPath();
+      ctx.arc(px, py, v.r * pulse, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.8)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 9px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(v.letter, px, py);
+      ctx.restore();
+    }
+
     // player
     drawGlowCircle(player.x,player.y,player.r,"rgba(90,170,255,0.95)");
+    if(effectShield > 0){
+      ctx.save();
+      ctx.strokeStyle = "rgba(241,196,15," + (0.5 + Math.sin(t*8)*0.2) + ")";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.r + 4, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // sparks
     for(const s of sparks){
@@ -256,8 +415,11 @@
       overlay("PAUZA", "Davam üçün P");
     } else if(over){
       overlay("Oyun Bitdi", "R: yenidən · Skor: " + score);
+    } else if(sceneIntroTime > 0){
+      const alpha = Math.min(1, sceneIntroTime / 0.4);
+      overlayScene(scene.name, alpha);
     }
-
+    ctx.restore();
     requestAnimationFrame(loop);
   }
 
@@ -271,6 +433,21 @@
     ctx.fillText(title, W/2, H/2 - 10);
     ctx.font = "400 18px system-ui";
     ctx.fillText(sub, W/2, H/2 + 24);
+    ctx.restore();
+  }
+  function overlayScene(name, alpha){
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = "rgba(0,0,0,.4)";
+    ctx.fillRect(0,0,W,H);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#ffcc44";
+    ctx.textAlign = "center";
+    ctx.font = "700 52px system-ui";
+    ctx.fillText("Səhnə: " + name, W/2, H/2);
+    ctx.font = "400 16px system-ui";
+    ctx.fillStyle = "rgba(255,255,255,.9)";
+    ctx.fillText("Daha sürətli! Daha çox təhlükə!", W/2, H/2 + 36);
     ctx.restore();
   }
 
