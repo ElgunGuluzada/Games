@@ -1,73 +1,140 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="az">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Neon Dodge</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>Neon Dodge PRO</title>
     <style>
+        * { touch-action: none; }
         html, body {
             height: 100%;
             margin: 0;
             background: #05060a;
             color: #e8f0ff;
-            font-family: system-ui
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            overflow: hidden;
         }
 
         .wrap {
             display: grid;
             place-items: center;
-            height: 100%
+            height: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        .game-container {
+            position: relative;
+            max-width: 100%;
         }
 
         canvas {
+            display: block;
             border: 1px solid #1a2a55;
             border-radius: 12px;
-            box-shadow: 0 0 30px rgba(70,120,255,.25)
+            box-shadow: 0 0 30px rgba(70,120,255,.25), 0 0 60px rgba(70,120,255,.1);
+            max-width: 100%;
+            height: auto;
         }
 
         .hud {
             max-width: 760px;
             margin: 12px auto 0;
             display: flex;
+            flex-wrap: wrap;
             justify-content: space-between;
-            gap: 12px
+            gap: 12px;
         }
 
         .pill {
             padding: 8px 12px;
             border: 1px solid #223;
             border-radius: 999px;
-            background: rgba(20,30,60,.45)
+            background: rgba(20,30,60,.45);
         }
+
+        .pill.powerup { border-color: #5a9; background: rgba(50,90,90,.4); }
 
         kbd {
             background: #121826;
             border: 1px solid #2b3350;
             border-bottom-width: 3px;
             border-radius: 6px;
-            padding: 2px 6px
+            padding: 2px 6px;
         }
 
-        .hint {
-            opacity: .85;
-            font-size: 14px
-        }
+        .hint { opacity: .85; font-size: clamp(12px, 2.5vw, 14px); }
 
         button {
-            cursor: pointer
+            cursor: pointer;
+            border: none;
+            color: inherit;
+        }
+        button:hover { opacity: .9; }
+        button:active { transform: scale(.97); }
+
+        #touchZone {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            touch-action: none;
+        }
+        @media (max-width: 800px) {
+            #touchZone { display: block; }
+        }
+
+        .menu-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(5,6,10,.92);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        .menu-overlay h1 {
+            font-size: clamp(36px, 8vw, 56px);
+            margin: 0 0 8px;
+            background: linear-gradient(135deg, #5aafff, #a05aff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .menu-overlay p { opacity: .8; margin: 0 0 24px; }
+        .menu-btn {
+            padding: 14px 32px;
+            font-size: 18px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #2a4a8a, #1a2a55);
+            border: 1px solid #3a5a9a;
+            cursor: pointer;
+            color: #e8f0ff;
+            transition: transform .1s, box-shadow .2s;
+        }
+        .menu-btn:hover {
+            box-shadow: 0 0 24px rgba(90,170,255,.4);
         }
     </style>
 </head>
 <body>
     <div class="wrap">
-        <div>
+        <div class="game-container">
+            <div id="touchZone"></div>
             <canvas id="c" width="760" height="480"></canvas>
             <div class="hud">
-                <div class="pill">Skor: <b id="score">0</b> · Rekord: <b id="best">0</b></div>
-                <div class="pill hint">İdarə: <kbd>WASD</kbd>/<kbd>←↑→↓</kbd> · Pauza: <kbd>P</kbd> · Yenidən: <kbd>R</kbd></div>
+                <div class="pill">Səviyyə: <b id="level">1</b> · Skor: <b id="score">0</b> · Rekord: <b id="best">0</b> · Kombo: <b id="combo">0</b></div>
+                <div class="pill hint">İdarə: <kbd>WASD</kbd>/<kbd>←↑→↓</kbd> və ya toxunun · Pauza: <kbd>P</kbd> · Yenidən: <kbd>R</kbd></div>
+                <div class="pill" id="powerupInfo"></div>
                 <button class="pill" id="restart">Restart</button>
             </div>
         </div>
+    </div>
+
+    <div class="menu-overlay" id="menuOverlay">
+        <h1>NEON DODGE PRO</h1>
+        <p>Topparları yığın, yüksək skor götür</p>
+        <button class="menu-btn" id="startBtn">OYUNA BAŞLA</button>
     </div>
 
     <script>
@@ -77,10 +144,43 @@
   const W = canvas.width, H = canvas.height;
 
   const scoreEl = document.getElementById("score");
-  const bestEl  = document.getElementById("best");
+  const bestEl = document.getElementById("best");
+  const levelEl = document.getElementById("level");
+  const comboEl = document.getElementById("combo");
+  const powerupInfoEl = document.getElementById("powerupInfo");
   const restartBtn = document.getElementById("restart");
+  const menuOverlay = document.getElementById("menuOverlay");
+  const startBtn = document.getElementById("startBtn");
+
+  // ---- Audio (Web Audio API) ----
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  function playTone(freq, duration, type = "sine", vol = 0.2) {
+    try {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = freq;
+      osc.type = type;
+      gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + duration);
+    } catch (_) {}
+  }
+  const sfx = {
+    score: () => playTone(880, 0.06, "sine", 0.12),
+    combo: () => { playTone(1100, 0.08, "sine", 0.15); playTone(1320, 0.1, "sine", 0.1); },
+    powerup: () => { playTone(523, 0.1, "square", 0.08); playTone(659, 0.12, "square", 0.06); },
+    bomb: () => playTone(200, 0.2, "sawtooth", 0.2),
+    death: () => { playTone(150, 0.3, "sawtooth", 0.25); playTone(80, 0.4, "sine", 0.2); },
+    start: () => { playTone(440, 0.1, "sine", 0.15); playTone(554, 0.15, "sine", 0.1); },
+    levelUp: () => { playTone(523, 0.08, "sine", 0.2); playTone(659, 0.1, "sine", 0.15); playTone(784, 0.12, "sine", 0.12); }
+  };
 
   const key = new Set();
+  let touchStartX = 0, touchStartY = 0, touchX = 0, touchY = 0, touchActive = false;
+
   window.addEventListener("keydown", e => {
     const k = e.key.toLowerCase();
     key.add(k);
@@ -89,56 +189,129 @@
   });
   window.addEventListener("keyup", e => key.delete(e.key.toLowerCase()));
 
+  const touchZone = document.getElementById("touchZone");
+  touchZone.addEventListener("touchstart", e => {
+    e.preventDefault();
+    touchActive = true;
+    touchStartX = touchX = e.touches[0].clientX;
+    touchStartY = touchY = e.touches[0].clientY;
+  }, { passive: false });
+  touchZone.addEventListener("touchmove", e => {
+    e.preventDefault();
+    touchX = e.touches[0].clientX;
+    touchY = e.touches[0].clientY;
+  }, { passive: false });
+  touchZone.addEventListener("touchend", () => touchActive = false, { passive: false });
+
+  startBtn.onclick = () => {
+    menuOverlay.style.display = "none";
+    started = true;
+    audioCtx.resume?.();
+    sfx.start();
+  };
+
   let best = Number(localStorage.getItem("neon_best") || 0);
+  let bestLevel = Number(localStorage.getItem("neon_best_level") || 1);
   bestEl.textContent = best;
 
-  const player = { x: W/2, y: H-70, r: 14, vx:0, vy:0, speed: 420 };
+  const player = { x: W/2, y: H-70, baseR: 14, r: 14, vx:0, vy:0, speed: 420 };
   const hazards = [];
+  const powerups = [];
   const sparks = [];
+  const trail = [];
+  const LEVEL_INTERVAL = 12;
+  const LEVEL_NAMES = ["Başlanğıc","Neon","Sürət","Xaos","Usta","Əfsanə","Ölümsüz"];
   let t = 0;
   let score = 0;
+  let level = 1;
+  let levelUpFlash = 0;
+  let combo = 0;
+  let maxCombo = 0;
   let over = false;
   let paused = false;
+  let started = false;
+
+  // Power-up state
+  let powerupShield = 0;
+  let powerupSlowmo = 0;
+  let powerupBombReady = false;
+  let powerupShrink = 0;
+  let powerupGrow = 0;
 
   function rand(a,b){ return a + Math.random()*(b-a); }
   function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
+  const HAZARD_TYPES = ["circle", "triangle", "square"];
+  function getLevel() { return Math.floor(score / LEVEL_INTERVAL) + 1; }
+  function getLevelMultiplier(l) { return 1 + (l - 1) * 0.12; }
   function spawnHazard(){
+    const lvl = getLevel();
+    const mult = getLevelMultiplier(lvl);
     const r = rand(10, 26);
+    const type = HAZARD_TYPES[Math.floor(rand(0, 3))];
     hazards.push({
       x: rand(r, W-r),
       y: -r - 10,
       r,
-      vy: rand(160, 360) + Math.min(score*2, 220),
-      vx: rand(-60, 60),
-      hue: rand(0, 25)
+      vy: (rand(160, 360) + Math.min(score*2, 220)) * mult,
+      vx: rand(-60, 60) * mult,
+      hue: rand(0, 25) + (lvl - 1) * 3,
+      type,
+      rot: rand(0, Math.PI*2)
     });
   }
 
-  function burst(x,y,n=12){
+  function spawnPowerup(x, y) {
+    const types = ["shield", "slowmo", "bomb", "shrink", "grow"];
+    const type = types[Math.floor(rand(0, 5))];
+    const hues = { shield: 200, slowmo: 280, bomb: 0, shrink: 120, grow: 40 };
+    powerups.push({
+      x, y,
+      r: 12,
+      vy: 120,
+      type,
+      hue: hues[type]
+    });
+  }
+
+  function burst(x,y,n=12, hueShift=0){
     for(let i=0;i<n;i++){
       sparks.push({
         x,y,
         vx: rand(-220,220),
         vy: rand(-220,220),
         life: rand(.25,.7),
-        a: 1
+        a: 1,
+        hue: 140 + hueShift
       });
     }
   }
 
   function reset(){
     hazards.length = 0;
+    powerups.length = 0;
     sparks.length = 0;
+    trail.length = 0;
     player.x = W/2; player.y = H-70;
-    score = 0; t = 0;
+    score = 0; t = 0; level = 1; levelUpFlash = 0; combo = 0;
+    powerupShield = 0; powerupSlowmo = 0; powerupBombReady = false;
+    powerupShrink = 0; powerupGrow = 0;
+    player.r = player.baseR;
     over = false;
     paused = false;
     scoreEl.textContent = score;
+    levelEl.textContent = level;
+    comboEl.textContent = combo;
+    powerupInfoEl.textContent = "";
+    powerupInfoEl.className = "pill";
   }
 
-  restartBtn.onclick = reset;
+  restartBtn.onclick = () => {
+    reset();
+    if (started) requestAnimationFrame(loop);
+  };
 
+  let screenShake = 0;
   function drawGrid(){
     ctx.save();
     ctx.globalAlpha = 0.18;
@@ -158,113 +331,268 @@
     g.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(x,y,r*3,0,Math.PI*2); ctx.fill();
-
     ctx.fillStyle = color;
     ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+
+  function drawHazard(h) {
+    const col = `hsla(${h.hue}, 100%, 60%, 0.95)`;
+    ctx.save();
+    ctx.translate(h.x, h.y);
+    ctx.rotate(h.rot);
+    if (h.type === "circle") {
+      drawGlowCircle(0, 0, h.r, col);
+    } else if (h.type === "triangle") {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = (i/3)*Math.PI*2 - Math.PI/2;
+        ctx.lineTo(Math.cos(a)*h.r, Math.sin(a)*h.r);
+      }
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillStyle = col;
+      ctx.fillRect(-h.r, -h.r, h.r*2, h.r*2);
+    }
+    ctx.restore();
   }
 
   let last = performance.now();
   function loop(now){
     const dt = Math.min(0.033, (now-last)/1000);
     last = now;
+    const gameDt = powerupSlowmo > 0 ? dt * 0.4 : dt;
 
-    if(!paused && !over){
-      t += dt;
+    if(!paused && !over && started){
+      t += gameDt;
+      if (powerupShield > 0) powerupShield -= gameDt;
+      if (powerupSlowmo > 0) powerupSlowmo -= gameDt;
+      if (powerupShrink > 0) powerupShrink -= gameDt;
+      if (powerupGrow > 0) powerupGrow -= gameDt;
+      player.r = powerupShrink > 0 ? 8 : powerupGrow > 0 ? 22 : player.baseR;
 
       // input
       let ax=0, ay=0;
-      if(key.has("arrowleft")||key.has("a")) ax -= 1;
-      if(key.has("arrowright")||key.has("d")) ax += 1;
-      if(key.has("arrowup")||key.has("w")) ay -= 1;
-      if(key.has("arrowdown")||key.has("s")) ay += 1;
+      if (touchActive) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+        const cx = (rect.left + rect.right)/2, cy = (rect.top + rect.bottom)/2;
+        ax = clamp((touchX - cx) / (rect.width/2), -1, 1);
+        ay = clamp((touchY - cy) / (rect.height/2), -1, 1);
+      } else {
+        if(key.has("arrowleft")||key.has("a")) ax -= 1;
+        if(key.has("arrowright")||key.has("d")) ax += 1;
+        if(key.has("arrowup")||key.has("w")) ay -= 1;
+        if(key.has("arrowdown")||key.has("s")) ay += 1;
+      }
 
       const len = Math.hypot(ax,ay) || 1;
       ax/=len; ay/=len;
 
-      player.x += ax * player.speed * dt;
-      player.y += ay * player.speed * dt;
+      player.x += ax * player.speed * gameDt;
+      player.y += ay * player.speed * gameDt;
       player.x = clamp(player.x, player.r, W-player.r);
       player.y = clamp(player.y, player.r, H-player.r);
 
-      // spawn rate scales with score
-      const rate = clamp(0.85 - score/250, 0.22, 0.85);
-      if (t % rate < dt) spawnHazard();
+      // trail
+      trail.push({ x: player.x, y: player.y, a: 1 });
+      if (trail.length > 25) trail.shift();
+      for (const tr of trail) tr.a -= 0.04;
 
-      // update hazards
+      // spawn
+      const newLevel = getLevel();
+      if (newLevel > level) {
+        level = newLevel;
+        levelUpFlash = 1.2;
+        sfx.levelUp();
+        burst(player.x, player.y, 24, 10);
+        if (level > bestLevel) {
+          bestLevel = level;
+          localStorage.setItem("neon_best_level", String(bestLevel));
+        }
+      }
+      levelEl.textContent = level;
+      const baseRate = clamp(0.85 - score/250, 0.35, 0.85);
+      const rate = baseRate / getLevelMultiplier(level);
+      if (t % rate < gameDt) spawnHazard();
+      const powerupChance = 0.0008 + level * 0.0003;
+      if (Math.random() < powerupChance) spawnPowerup(rand(40, W-40), -20);
+
+      // powerups
+      for (let i = powerups.length - 1; i >= 0; i--) {
+        const p = powerups[i];
+        p.y += p.vy * gameDt;
+        const d = Math.hypot(p.x - player.x, p.y - player.y);
+        if (d < p.r + player.r) {
+          powerups.splice(i, 1);
+          sfx.powerup();
+          if (p.type === "shield") powerupShield = 5;
+          else if (p.type === "slowmo") powerupSlowmo = 4;
+          else if (p.type === "bomb") powerupBombReady = true;
+          else if (p.type === "shrink") { powerupGrow = 0; powerupShrink = 6; }
+          else if (p.type === "grow") { powerupShrink = 0; powerupGrow = 6; }
+        }
+        if (p.y > H + 20) powerups.splice(i, 1);
+      }
+
+      // bomb key
+      if (key.has(" ") && powerupBombReady) {
+        powerupBombReady = false;
+        sfx.bomb();
+        screenShake = 0.3;
+        burst(player.x, player.y, 60, 20);
+        for (let j = hazards.length - 1; j >= 0; j--) {
+          hazards.splice(j, 1);
+          score += 2;
+        }
+      }
+
+      // hazards
       for(let i=hazards.length-1;i>=0;i--){
         const h = hazards[i];
-        h.y += h.vy * dt;
-        h.x += h.vx * dt;
+        h.y += h.vy * gameDt;
+        h.x += h.vx * gameDt;
+        h.rot += 0.02;
         if(h.x < h.r || h.x > W-h.r) h.vx *= -1;
 
-        // collision
         const d = Math.hypot(h.x-player.x, h.y-player.y);
         if(d < h.r + player.r){
-          over = true;
-          burst(player.x, player.y, 36);
-          if(score > best){
-            best = score;
-            localStorage.setItem("neon_best", String(best));
-            bestEl.textContent = best;
+          if (powerupShield > 0) {
+            hazards.splice(i, 1);
+            burst(h.x, h.y, 12, 15);
+          } else {
+            over = true;
+            combo = 0;
+            screenShake = 0.5;
+            burst(player.x, player.y, 48);
+            sfx.death();
+            if(score > best){
+              best = score;
+              localStorage.setItem("neon_best", String(best));
+              bestEl.textContent = best;
+            }
           }
         }
-        // score when passed
         if(h.y - h.r > H){
           hazards.splice(i,1);
           score++;
+          combo++;
+          if (combo > maxCombo) maxCombo = combo;
+          if (combo >= 5 && combo % 5 === 0) sfx.combo();
+          else if (score % 10 !== 0) sfx.score();
           scoreEl.textContent = score;
-          if(score % 10 === 0) burst(player.x, player.y, 8);
+          comboEl.textContent = combo;
+          if(score % 10 === 0) { burst(player.x, player.y, 12); sfx.combo(); }
         }
       }
+
+      // reset combo on hit (handled above), on death reset
+      if (over) combo = 0;
 
       // sparks
       for(let i=sparks.length-1;i>=0;i--){
         const s = sparks[i];
-        s.life -= dt;
-        s.x += s.vx * dt;
-        s.y += s.vy * dt;
+        s.life -= gameDt;
+        s.x += s.vx * gameDt;
+        s.y += s.vy * gameDt;
         s.vx *= 0.98; s.vy *= 0.98;
         s.a = clamp(s.life/0.7,0,1);
         if(s.life <= 0) sparks.splice(i,1);
       }
     }
 
+    if (screenShake > 0) screenShake -= 0.03;
+    if (levelUpFlash > 0) levelUpFlash -= 0.03;
+
     // draw
-    ctx.clearRect(0,0,W,H);
+    const sx = screenShake > 0 ? rand(-8, 8) * screenShake : 0;
+    const sy = screenShake > 0 ? rand(-8, 8) * screenShake : 0;
+    ctx.save();
+    ctx.translate(sx, sy);
+
+    ctx.clearRect(-20, -20, W+40, H+40);
     ctx.fillStyle = "#05060a";
-    ctx.fillRect(0,0,W,H);
+    ctx.fillRect(-20, -20, W+40, H+40);
 
     drawGrid();
 
+    // trail
+    for (const tr of trail) {
+      if (tr.a <= 0) continue;
+      ctx.fillStyle = `rgba(90,170,255,${tr.a*0.5})`;
+      ctx.beginPath();
+      ctx.arc(tr.x, tr.y, player.r*0.7, 0, Math.PI*2);
+      ctx.fill();
+    }
+
     // hazards
-    for(const h of hazards){
-      const col = `hsla(${h.hue}, 100%, 60%, 0.95)`;
-      drawGlowCircle(h.x,h.y,h.r,col);
+    for(const h of hazards) drawHazard(h);
+
+    // powerups
+    const powerupIcon = { shield: "Q", slowmo: "Y", bomb: "O", shrink: "K", grow: "B" };
+    for (const p of powerups) {
+      const col = `hsla(${p.hue}, 90%, 65%, 0.9)`;
+      drawGlowCircle(p.x, p.y, p.r, col);
+      ctx.fillStyle = "#fff";
+      ctx.font = "10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(powerupIcon[p.type] || p.type[0], p.x, p.y + 4);
     }
 
     // player
-    drawGlowCircle(player.x,player.y,player.r,"rgba(90,170,255,0.95)");
+    if (powerupShield > 0) {
+      ctx.strokeStyle = "rgba(100,220,255,0.8)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.r + 6, 0, Math.PI*2);
+      ctx.stroke();
+    }
+    drawGlowCircle(player.x, player.y, player.r, "rgba(90,170,255,0.95)");
 
     // sparks
     for(const s of sparks){
-      ctx.fillStyle = `rgba(140,220,255,${s.a})`;
+      ctx.fillStyle = `hsla(${s.hue || 200}, 80%, 80%, ${s.a})`;
       ctx.fillRect(s.x, s.y, 2.5, 2.5);
     }
 
-    // overlay
-    if(paused){
-      overlay("PAUZA", "Davam üçün P");
-    } else if(over){
-      overlay("Oyun Bitdi", "R: yenidən · Skor: " + score);
+    const pi = powerupShield > 0 ? `🛡 Qalxan: ${powerupShield.toFixed(1)}s` :
+      powerupSlowmo > 0 ? `⏱ Yavaş: ${powerupSlowmo.toFixed(1)}s` :
+      powerupBombReady ? "💣 BOŞLUQ: Bomba" :
+      powerupShrink > 0 ? `📉 Kiçik: ${powerupShrink.toFixed(1)}s` :
+      powerupGrow > 0 ? `📈 Böyük: ${powerupGrow.toFixed(1)}s` : "";
+    powerupInfoEl.textContent = pi;
+    if (powerupShield || powerupSlowmo || powerupBombReady || powerupShrink || powerupGrow) powerupInfoEl.className = "pill powerup";
+
+    // level up flash
+    if (levelUpFlash > 0) {
+      ctx.save();
+      ctx.globalAlpha = levelUpFlash;
+      ctx.fillStyle = "rgba(90,170,255,0.3)";
+      ctx.fillRect(-20, -20, W+40, H+40);
+      ctx.fillStyle = "#fff";
+      ctx.font = "700 52px system-ui";
+      ctx.textAlign = "center";
+      const lvlName = LEVEL_NAMES[Math.min(level - 1, LEVEL_NAMES.length - 1)];
+      ctx.fillText(`SƏVİYYƏ ${level}`, W/2, H/2 - 20);
+      ctx.font = "400 20px system-ui";
+      ctx.fillText(lvlName, W/2, H/2 + 10);
+      ctx.restore();
     }
 
+    // overlay
+    if(!started){ /* menu visible */ }
+    else if(paused) overlay("PAUZA", "Davam üçün P");
+    else if(over) overlay("Oyun Bitdi", `R: yenidən · Skor: ${score} · Səviyyə: ${level} (rekord: ${bestLevel}) · Kombo: ${maxCombo}`);
+
+    ctx.restore();
     requestAnimationFrame(loop);
   }
 
   function overlay(title, sub){
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,.55)";
-    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = "rgba(0,0,0,.6)";
+    ctx.fillRect(-20, -20, W+40, H+40);
     ctx.fillStyle = "#e9f1ff";
     ctx.textAlign = "center";
     ctx.font = "700 44px system-ui";
@@ -274,6 +602,7 @@
     ctx.restore();
   }
 
+  window.addEventListener("keyup", e => { if (e.key === " ") key.delete(" "); });
   reset();
   requestAnimationFrame(loop);
 })();
